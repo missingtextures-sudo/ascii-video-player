@@ -8,6 +8,9 @@ animation. It works in a normal browser or as a live wallpaper in
 Everything is one HTML file with no dependencies, no build step and no server.
 Videos never leave your computer.
 
+**Try it in your browser:** <https://missingtextures-sudo.github.io/ascii-video-player/>
+(the page runs locally; dropped videos are not uploaded anywhere).
+
 ## Quick start
 
 1. Download `ascii_video_player.html` and double-click it to open it in Chrome, Edge or Firefox.
