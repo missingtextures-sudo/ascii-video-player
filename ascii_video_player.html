@@ -1,0 +1,701 @@
+<!doctype html>
+<!--
+  ASCII Video Player - plays any local video as glowing colour ASCII at 2560x1440,
+  and exports it as a self-contained ASCII animation .html file.
+
+  USE
+    Double-click to open in a browser, then drop a video file on the page
+    (or click the box / press O to pick one). Formats: whatever your browser
+    plays (mp4/h264, webm, mov in most cases). Nothing is uploaded anywhere.
+
+  EXPORT
+    Press X. Pick frame rate, detail and time range, then Export. The page
+    steps through the video frame by frame and downloads one .html file that
+    plays the ASCII animation on its own (no video file needed, no sound).
+    Current colour mode, character set, edges, brightness and contrast are baked in.
+    Audio-reactive effects are included only if they're on (A) when you export.
+
+  AS A WALLPAPER (Lively / Wallpaper Engine)
+    Use an exported .html directly, or put a video next to this file named
+    video.mp4 (or pass ?src=myclip.webm) and it loads automatically.
+    URL options: ?mode=0..3 &set=0..4 &cell=8..32 &edges=0..2 &bright=-0.5..0.5 &contrast=0.5..3 &hud=0
+
+  KEYS
+    Space play/pause   M mute   Left/Right seek 5 s   O open file   X export
+    C colour mode   R character set   D / Shift+D detail   E edges off/soft/strong
+    [ ] brightness   - = contrast   G glow   F fullscreen   H hide help
+    Up/Down volume   A audio-reactive effects on/off (?react=1 starts with them on)
+    Top-right slider: audio-reactive intensity 0-200% (?intensity=0..2); exports keep it
+    Top-right "Effects": switch each effect on/off (?fx=zoom,rgb,bars or ?fx=all); exports keep the choice
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ASCII Video Player</title>
+<style>
+  :root { --bg: #030208; --fg: #ece8f6; --muted: #9a93b3; --accent: #ff4fd8; --panel: rgba(8, 6, 16, 0.86); --line: #3a3450; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--fg);
+    font: 15px/1.45 Consolas, "Cascadia Mono", Menlo, monospace; }
+  canvas { display: block; width: 100vw; height: 100vh; object-fit: contain; background: var(--bg); }
+  #drop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #drop.hidden { display: none; }
+  #drop button { font: inherit; color: var(--fg); background: var(--panel); border: 2px dashed var(--muted);
+    border-radius: 12px; padding: 40px 56px; cursor: pointer; max-width: 100%; }
+  #drop button:hover, #drop button:focus-visible, #drop.over button { border-color: var(--accent); outline: none; }
+  #drop small { display: block; color: var(--muted); margin-top: 8px; }
+  #hud { position: fixed; left: 16px; bottom: 16px; background: var(--panel); padding: 10px 14px; border-radius: 8px;
+    white-space: pre; transition: opacity 0.4s; pointer-events: none; max-width: calc(100vw - 32px); overflow: hidden; }
+  #hud.idle, #hud.off { opacity: 0; }
+  #fxpanel { position: fixed; right: 16px; top: 16px; background: var(--panel); padding: 10px 14px; border-radius: 8px;
+    display: flex; align-items: center; gap: 10px; transition: opacity 0.4s; max-width: calc(100vw - 32px); flex-wrap: wrap; }
+  #fxpanel.idle:not(:hover):not(:focus-within), #fxpanel.off { opacity: 0; }
+  #fxpanel input { accent-color: var(--accent); }
+  #fxpanel input[type=range] { width: 180px; }
+  #fxpanel details { flex-basis: 100%; }
+  #fxpanel summary { cursor: pointer; color: var(--muted); }
+  #fxpanel summary:focus-visible, #fxpanel input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #fxlist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; margin: 8px 0 6px; }
+  #fxlist label { cursor: pointer; white-space: nowrap; }
+  #fxpanel small { color: var(--muted); display: block; max-width: 340px; }
+  #fxpanel output { min-width: 4ch; text-align: right; }
+  #fxpanel.disabled label, #fxpanel.disabled output { color: var(--muted); }
+  dialog { color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px 24px; width: min(420px, calc(100vw - 32px)); font: inherit; }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+  dialog h2 { margin: 0 0 14px; font-size: 18px; }
+  dialog label { display: grid; grid-template-columns: 130px 1fr; align-items: center; gap: 10px; margin: 8px 0; }
+  dialog select, dialog input { font: inherit; color: var(--fg); background: #120f1e; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  dialog p { color: var(--muted); margin: 12px 0; min-height: 1.45em; }
+  dialog progress { width: 100%; accent-color: var(--accent); }
+  .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+  .row button { font: inherit; color: var(--fg); background: #1c1730; border: 1px solid var(--line); border-radius: 6px; padding: 7px 16px; cursor: pointer; }
+  .row button.primary { background: var(--accent); border-color: var(--accent); color: #12001a; font-weight: bold; }
+  .row button:focus-visible, dialog select:focus-visible, dialog input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<canvas id="view" width="2560" height="1440" aria-label="Video rendered as ASCII art"></canvas>
+<div id="drop"><button id="pick" type="button">Drop a video file here, or click to choose one
+<small>Nothing is uploaded: the file plays only on this computer.</small></button></div>
+<div id="hud" aria-live="polite"></div>
+<div id="fxpanel"><label for="fxint">Audio-reactive intensity</label>
+  <input id="fxint" type="range" min="0" max="200" step="5" value="100"><output id="fxval" for="fxint">100%</output>
+  <details><summary>Effects</summary><div id="fxlist"></div>
+  <small>Invert and Flash strobe on beats; leave them off if flashing bothers you.</small></details></div>
+<input id="file" type="file" accept="video/*" hidden>
+<video id="vid" loop playsinline hidden></video>
+<dialog id="exp" aria-labelledby="exp-title">
+  <h2 id="exp-title">Export ASCII animation</h2>
+  <label>Frame rate <select id="xfps"><option>10</option><option>12</option><option selected>15</option><option>24</option><option>30</option></select></label>
+  <label>Detail <select id="xcell"></select></label>
+  <label>From (seconds) <input id="xfrom" type="number" min="0" step="0.1" value="0"></label>
+  <label>To (seconds) <input id="xto" type="number" min="0" step="0.1" value="0"></label>
+  <label>Sound <span><input id="xaud" type="checkbox" checked> include the video's audio</span></label>  <p id="xinfo"></p>
+  <progress id="xprog" value="0" max="1" hidden></progress>
+  <div class="row"><button id="xcancel" type="button">Cancel</button><button id="xgo" class="primary" type="button">Export</button></div>
+</dialog>
+
+<!-- Shared renderer. The exporter copies this block verbatim into every exported file. -->
+<script id="core">
+"use strict";
+const W = 2560, H = 1440, BG = "#030208";
+const mk = (w, h) => { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; };
+// Glyphs are rasterised once into sparse [offset, alpha] lists and written straight into
+// one big pixel buffer each frame: per-cell canvas calls are far too slow at 20k+ cells.
+function rasterGlyphs(chars, CW, CH) {
+  const a = mk(CW, CH).getContext("2d", { willReadFrequently: true });
+  a.font = `bold ${Math.round(CH * 0.94)}px Consolas, "Cascadia Mono", Menlo, "DejaVu Sans Mono", monospace`;
+  a.textBaseline = "top"; a.fillStyle = "#fff";
+  return [...chars].map(ch => {
+    a.clearRect(0, 0, CW, CH); a.fillText(ch, 0, Math.round(CH * 0.04));
+    const d = a.getImageData(0, 0, CW, CH).data, list = [];
+    for (let y = 0; y < CH; y++) for (let x = 0; x < CW; x++) { const al = d[(y * CW + x) * 4 + 3]; if (al > 20) list.push(y * W + x, al); }
+    return Int32Array.from(list);
+  });
+}
+function makeRenderer(view) {
+  const vctx = view.getContext("2d"), scene = mk(W, H), sctx = scene.getContext("2d"); // scene persists: trails
+  const glyphs = mk(W, H), gctx = glyphs.getContext("2d"), gimg = gctx.createImageData(W, H), g32 = new Uint32Array(gimg.data.buffer);
+  const glowA = mk(W / 4, H / 4), gA = glowA.getContext("2d"), glowB = mk(W / 16, H / 16), gB = glowB.getContext("2d");
+  const overlay = mk(W, H), tmp = mk(W / 2, H / 2), tc = tmp.getContext("2d"); // tmp: RGB split
+  { // vignette + scanlines, drawn once
+    const o = overlay.getContext("2d"), grd = o.createRadialGradient(W / 2, H / 2, H * 0.4, W / 2, H / 2, H * 1.1);
+    grd.addColorStop(0, "rgba(0,0,0,0)"); grd.addColorStop(1, "rgba(0,0,0,0.6)");
+    o.fillStyle = grd; o.fillRect(0, 0, W, H);
+    o.fillStyle = "rgba(0,0,0,0.14)"; for (let y = 0; y < H; y += 3) o.fillRect(0, y, W, 1);
+  }
+  sctx.fillStyle = BG; sctx.fillRect(0, 0, W, H);
+  let GL = [], CW = 10, COLS = 0, N = 0, CHh = 18;
+  return {
+    setGrid(chars, cw, ch) {
+      CW = cw; CHh = ch; COLS = Math.floor(W / cw); N = COLS * Math.floor(H / ch); GL = rasterGlyphs(chars, cw, ch);
+      return { COLS, ROWS: Math.floor(H / ch), N };
+    },
+    // cellChar: glyph index per cell (255 = empty); cellRGB: 0xBBGGRR per cell
+    // fx (optional): screen-level audio-reactive effects from makeReactor().params()
+    draw(cellChar, cellRGB, glow, fx) {
+      g32.fill(0);
+      for (let c = 0; c < N; c++) {
+        const gi = cellChar[c]; if (gi === 255) continue;
+        const gl = GL[gi]; if (!gl) continue;
+        const rgb = cellRGB[c], base = ((c / COLS) | 0) * CHh * W + (c % COLS) * CW;
+        for (let k = 0; k < gl.length; k += 2) g32[base + gl[k]] = ((gl[k + 1] << 24) | rgb) >>> 0; // ABGR little-endian
+      }
+      gctx.putImageData(gimg, 0, 0);
+      sctx.fillStyle = "rgba(3,2,8,0.7)"; sctx.fillRect(0, 0, W, H);
+      sctx.drawImage(glyphs, 0, 0);
+      vctx.globalCompositeOperation = "source-over"; vctx.globalAlpha = 1;
+      if (fx) {
+        vctx.fillStyle = BG; vctx.fillRect(0, 0, W, H);
+        const z = fx.zoom, x0 = (W - W * z) / 2 + (Math.random() - 0.5) * fx.shake, y0 = (H - H * z) / 2 + (Math.random() - 0.5) * fx.shake * 0.6;
+        if (fx.wave > 0.5) { // wave warp: horizontal bands swing on a travelling sine
+          const bands = 48, bh = H / bands;
+          for (let b = 0; b < bands; b++)
+            vctx.drawImage(scene, 0, b * bh, W, bh + 1, x0 + Math.sin(b * 0.45 + fx.t * 6) * fx.wave, y0 + b * bh * z, W * z, (bh + 1) * z);
+        } else vctx.drawImage(scene, x0, y0, W * z, H * z);
+        if (fx.slices) for (let k = 0; k < 6; k++) { // glitch: shove horizontal bands sideways
+          const sy = Math.random() * H, hh = 10 + Math.random() * 80;
+          vctx.drawImage(scene, 0, sy, W, hh, (Math.random() - 0.5) * 220, sy, W, hh);
+        }
+        if (fx.rgb > 0.5) { // RGB split: red and cyan copies pushed apart
+          for (const [tint, off] of [["#ff0000", -fx.rgb], ["#00ffff", fx.rgb]]) {
+            tc.globalCompositeOperation = "source-over"; tc.drawImage(view, 0, 0, tmp.width, tmp.height);
+            tc.globalCompositeOperation = "multiply"; tc.fillStyle = tint; tc.fillRect(0, 0, tmp.width, tmp.height);
+            vctx.globalCompositeOperation = "lighter"; vctx.globalAlpha = 0.45; vctx.drawImage(tmp, off, 0, W, H);
+          }
+          vctx.globalCompositeOperation = "source-over"; vctx.globalAlpha = 1;
+        }
+      } else vctx.drawImage(scene, 0, 0);
+      if (glow) { // two-layer bloom: tight + wide blurred copies added on top
+        const gk = fx ? fx.glow : 1;
+        gA.filter = "blur(3px)"; gA.clearRect(0, 0, glowA.width, glowA.height); gA.drawImage(view, 0, 0, glowA.width, glowA.height);
+        gB.filter = "blur(3px)"; gB.clearRect(0, 0, glowB.width, glowB.height); gB.drawImage(glowA, 0, 0, glowB.width, glowB.height);
+        vctx.globalCompositeOperation = "lighter";
+        vctx.globalAlpha = Math.min(1, 0.5 * gk); vctx.drawImage(glowA, 0, 0, W, H);
+        vctx.globalAlpha = Math.min(1, 0.4 * gk); vctx.drawImage(glowB, 0, 0, W, H);
+        vctx.globalCompositeOperation = "source-over"; vctx.globalAlpha = 1;
+      }
+      vctx.drawImage(overlay, 0, 0);
+      if (fx && fx.invert) { vctx.globalCompositeOperation = "difference"; vctx.fillStyle = "#fff"; vctx.fillRect(0, 0, W, H); vctx.globalCompositeOperation = "source-over"; }
+      if (fx && fx.flash > 0.01) { vctx.fillStyle = `rgba(255,255,255,${fx.flash})`; vctx.fillRect(0, 0, W, H); }
+    },
+  };
+}
+// Audio-reactive effects, each switchable. Defaults are the gentler originals.
+const FX_LIST = [["zoom", "Zoom punch"], ["shake", "Shake"], ["glow", "Glow pump"], ["glitch", "Glitch slices"],
+  ["flash", "Flash"], ["bright", "Brighten"], ["sparkle", "Sparkles"], ["rgb", "RGB split"], ["wave", "Wave warp"],
+  ["hue", "Colour shift"], ["scramble", "Glyph scramble"], ["bars", "Spectrum bars"], ["invert", "Invert on drops"]];
+const FX_DEFAULT = ["zoom", "shake", "glow", "glitch", "flash", "bright", "sparkle"];
+// Audio reactivity: taps a media element's sound with captureStream() (playback is left
+// alone, so it works while muted) and turns it into bass / mid / treble levels plus a
+// "hit" pulse on strong beats.
+function makeReactor(media) {
+  const fx = { bass: 0, mid: 0, high: 0, hit: 0, avg: 0, prev: 0, lastHit: 0, hue: 0, t: 0, inv: 0, lastInv: 0 };
+  const barLvl = new Float32Array(256);
+  let actx = null, analyser = null, freq = null, tapSrc = null;
+  function tapTrack(track) {
+    if (tapSrc) tapSrc.disconnect();
+    tapSrc = actx.createMediaStreamSource(new MediaStream([track])); tapSrc.connect(analyser);
+  }
+  function start() { // needs a click/key press first in most browsers
+    if (analyser) { actx.resume(); return true; }
+    const cap = media.captureStream || media.mozCaptureStream;
+    if (!cap) return false;
+    try {
+      const stream = cap.call(media);
+      actx = new AudioContext(); analyser = actx.createAnalyser();
+      analyser.fftSize = 1024; analyser.smoothingTimeConstant = 0.5; freq = new Uint8Array(analyser.frequencyBinCount);
+      const first = stream.getAudioTracks()[0]; if (first) tapTrack(first);
+      stream.addEventListener("addtrack", e => { if (e.track.kind === "audio") tapTrack(e.track); }); // new source loaded
+      actx.resume();
+      return true;
+    } catch { analyser = null; return false; }
+  }
+  const band = (a, b) => { let s = 0; for (let i = a; i < b; i++) s += freq[i]; return s / ((b - a) * 255); };
+  function update(on) {
+    if (!on || !analyser) { fx.bass = fx.mid = fx.high = fx.hit = 0; return; }
+    analyser.getByteFrequencyData(freq);
+    const hz = actx.sampleRate / analyser.fftSize, bin = f => Math.max(1, Math.round(f / hz));
+    const bass = band(bin(40), bin(250)), mid = band(bin(250), bin(2000)), high = band(bin(2000), bin(10000));
+    fx.bass = Math.max(bass, fx.bass * 0.85); fx.mid = Math.max(mid, fx.mid * 0.88); fx.high = Math.max(high, fx.high * 0.8);
+    const now = performance.now();
+    // beat onset: bass jumps sharply above the last reading and above its running average
+    let onset = false;
+    if (bass - fx.avg > 0.12 && bass > 0.3 && bass > fx.prev + 0.08 && now - fx.lastHit > 150) { fx.hit = 1; fx.lastHit = now; onset = true; }
+    else fx.hit *= 0.78;
+    fx.avg = fx.avg * 0.9 + bass * 0.1; fx.prev = bass;
+    fx.t = now / 1000;
+    fx.hue = (fx.hue + 0.01 + 0.05 * fx.bass + (onset ? 0.7 : 0)) % (Math.PI * 2); // drifts, jumps on beats
+    if (fx.inv > 0) fx.inv--;
+    if (onset && bass > 0.6 && now - fx.lastInv > 500) { fx.inv = 2; fx.lastInv = now; } // heavy drops only, max twice a second
+    // spectrum bars: log-spaced bands from 40 Hz to 12 kHz, fast rise, slow fall
+    const nb = barLvl.length;
+    for (let i = 0; i < nb; i++) {
+      const lo = bin(40 * Math.pow(300, i / nb)), hi = Math.max(lo + 1, bin(40 * Math.pow(300, (i + 1) / nb)));
+      barLvl[i] = Math.max(band(lo, Math.min(hi, freq.length)), barLvl[i] * 0.86);
+    }
+  }
+  // screen-level effects for draw(); s = intensity (0 = none, 1 = normal, 2 = double), on = { name: true }
+  const params = (s = 1, on = {}) => ({
+    zoom: on.zoom ? 1 + (0.04 * fx.bass + 0.03 * fx.hit) * s : 1, shake: on.shake ? 18 * fx.hit * s : 0,
+    glow: on.glow ? 1 + 0.9 * fx.bass * s : 1, slices: !!on.glitch && fx.hit > 0.7 && s >= 0.25,
+    flash: on.flash ? Math.min(0.5, 0.12 * fx.hit * fx.hit * s) : 0,
+    rgb: on.rgb ? (20 * fx.bass + 30 * fx.hit) * s : 0, wave: on.wave ? 60 * fx.mid * s : 0,
+    invert: !!on.invert && fx.inv > 0 && s >= 0.25, t: fx.t,
+  });
+  // cell-level effects on already-built cells
+  function applyToCells(cellChar, cellRGB, n, cols, nch, s = 1, on = {}) {
+    const top = nch - 1, k = on.bright ? 1 + (0.3 * fx.mid + 0.25 * fx.hit) * s : 1;
+    const sparkle = on.sparkle ? fx.high * fx.high * 0.03 * s : 0, scramble = on.scramble ? 0.15 * fx.hit * s : 0;
+    let m = null;
+    if (on.hue) { // hue rotation matrix (luma-preserving)
+      const a = fx.hue * Math.min(1, s), co = Math.cos(a), si = Math.sin(a);
+      m = [0.299 + 0.701 * co + 0.168 * si, 0.587 - 0.587 * co + 0.330 * si, 0.114 - 0.114 * co - 0.497 * si,
+           0.299 - 0.299 * co - 0.328 * si, 0.587 + 0.413 * co + 0.035 * si, 0.114 - 0.114 * co + 0.292 * si,
+           0.299 - 0.300 * co + 1.250 * si, 0.587 - 0.588 * co - 1.050 * si, 0.114 + 0.886 * co - 0.203 * si];
+    }
+    const clamp8 = v => v < 0 ? 0 : v > 255 ? 255 : v | 0;
+    for (let c = 0; c < n; c++) {
+      if (sparkle && Math.random() < sparkle) { cellChar[c] = top; cellRGB[c] = 0xffffff; continue; }
+      if (cellChar[c] === 255) continue;
+      if (scramble && Math.random() < scramble) cellChar[c] = 1 + ((Math.random() * top) | 0);
+      if (k > 1.01 || m) {
+        const v = cellRGB[c]; let r = (v & 255) * k, g = ((v >> 8) & 255) * k, b = ((v >> 16) & 255) * k;
+        if (m) { const r2 = m[0] * r + m[1] * g + m[2] * b, g2 = m[3] * r + m[4] * g + m[5] * b; b = m[6] * r + m[7] * g + m[8] * b; r = r2; g = g2; }
+        cellRGB[c] = (clamp8(b) << 16) | (clamp8(g) << 8) | clamp8(r);
+      }
+    }
+    if (on.bars) { // spectrum bars rising from the bottom edge, 3 cells wide
+      const rows = Math.floor(n / cols), nb = Math.floor(cols / 4), maxH = rows * 0.35 * Math.min(1.5, s);
+      for (let i = 0; i < nb; i++) {
+        const lvl = barLvl[Math.floor(i * barLvl.length / nb)], h = Math.min(rows, Math.round(lvl * maxH));
+        for (let y = 0; y < h; y++) {
+          const f = y / Math.max(1, maxH), rgb = ((90 + 110 * f) << 16) | ((255 - 200 * f) << 8) | (60 + 195 * f);
+          const row = (rows - 1 - y) * cols;
+          for (let dx = 0; dx < 3; dx++) { const c = row + i * 4 + dx; cellChar[c] = top; cellRGB[c] = rgb; }
+        }
+      }
+    }
+  }
+  return { fx, start, update, params, applyToCells };
+}
+</script>
+
+<script>
+"use strict";
+const Q = new URLSearchParams(location.search);
+const CHARSETS = [" .:-=+*#%@", " .'`^\",:;Il!i<>~+_-?][}{1)(|tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$", " .oO0@", " ░▒▓█", " 01"];
+const SET_NAMES = ["classic", "detailed", "dots", "blocks", "binary"];
+const MODES = ["full colour", "green phosphor", "mono white", "neon"];
+const CELLS = [8, 10, 12, 14, 16, 18, 24, 32]; // cell height in px: smaller = more characters
+const EDGES = ["off", "soft", "strong"], EDGE_THR = [0, 0.06, 0.025], EDGE_CH = "-\\|/";
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const num = (k, a, b, d) => { const n = parseFloat(Q.get(k)); return Number.isFinite(n) ? clamp(n, a, b) : d; };
+const opt = {
+  mode: Math.round(num("mode", 0, MODES.length - 1, 0)), set: Math.round(num("set", 0, CHARSETS.length - 1, 0)),
+  cell: CELLS.includes(+Q.get("cell")) ? +Q.get("cell") : 18, edges: Math.round(num("edges", 0, 2, 0)),
+  bright: num("bright", -0.5, 0.5, 0), contrast: num("contrast", 0.5, 3, 1), glow: true, hud: Q.get("hud") !== "0",
+  volume: num("volume", 0, 1, 1), react: Q.get("react") === "1", intensity: num("intensity", 0, 2, 1),
+  // ?fx=zoom,rgb,bars picks effects; ?fx=all turns every one on
+  fx: Object.fromEntries((Q.get("fx") === "all" ? FX_LIST.map(f => f[0]) : Q.get("fx") ? Q.get("fx").split(",") : FX_DEFAULT)
+    .filter(k => FX_LIST.some(f => f[0] === k)).map(k => [k, true])),
+};
+const cellW = ch => Math.round(ch * 0.555);
+const gridFor = ch => `${Math.floor(W / cellW(ch))}x${Math.floor(H / ch)}`;
+
+const vid = document.getElementById("vid"), drop = document.getElementById("drop"), hud = document.getElementById("hud");
+const fileIn = document.getElementById("file"), view = document.getElementById("view");
+const R = makeRenderer(view);
+let COLS, ROWS, N, NCH, sample, sx, lumBuf, cellChar, cellRGB;
+function charsNow() { return CHARSETS[opt.set] + EDGE_CH; }
+function rebuild() {
+  ({ COLS, ROWS, N } = R.setGrid(charsNow(), cellW(opt.cell), opt.cell));
+  NCH = [...CHARSETS[opt.set]].length;
+  sample = document.createElement("canvas"); sample.width = COLS; sample.height = ROWS;
+  sx = sample.getContext("2d", { willReadFrequently: true });
+  lumBuf = new Float32Array(N); cellChar = new Uint8Array(N); cellRGB = new Uint32Array(N);
+}
+rebuild();
+
+// ------------------------------------------------------- video -> cells
+function computeCells() {
+  const vw = vid.videoWidth, vh = vid.videoHeight;
+  if (!vw || !vh) return false;
+  const tA = W / H, vA = vw / vh; // crop to 16:9 ("cover") so it fills the screen
+  let cw = vw, chh = vh; if (vA > tA) cw = vh * tA; else chh = vw / tA;
+  sx.drawImage(vid, (vw - cw) / 2, (vh - chh) / 2, cw, chh, 0, 0, COLS, ROWS);
+  const px = sx.getImageData(0, 0, COLS, ROWS).data, con = opt.contrast, bri = opt.bright;
+  const adj = v => clamp(((v / 255 - 0.5) * con + 0.5 + bri) * 255, 0, 255);
+  for (let c = 0, o = 0; c < N; c++, o += 4)
+    lumBuf[c] = clamp(((0.2126 * px[o] + 0.7152 * px[o + 1] + 0.0722 * px[o + 2]) / 255 - 0.5) * con + 0.5 + bri, 0, 1);
+  const thr = EDGE_THR[opt.edges], mode = opt.mode;
+  for (let c = 0, o = 0; c < N; c++, o += 4) {
+    const l = lumBuf[c];
+    if (l < 0.04) { cellChar[c] = 255; continue; }
+    let gi = Math.min(NCH - 1, 1 + ((l * (NCH - 1)) | 0));
+    if (thr) {
+      const x = c % COLS;
+      if (x > 0 && x < COLS - 1 && c >= COLS && c < N - COLS) {
+        const gx = lumBuf[c + 1] - lumBuf[c - 1], gy = lumBuf[c + COLS] - lumBuf[c - COLS];
+        if (gx * gx + gy * gy > thr) { // glyph along the edge, perpendicular to the brightness gradient
+          let a = Math.atan2(gy * opt.cell, gx * cellW(opt.cell)) + Math.PI / 2;
+          a = ((a % Math.PI) + Math.PI) % Math.PI; const p = Math.PI / 8;
+          gi = NCH + (a < p || a > 7 * p ? 0 : a < 3 * p ? 1 : a < 5 * p ? 2 : 3);
+        }
+      }
+    }
+    let r = adj(px[o]), g = adj(px[o + 1]), b = adj(px[o + 2]);
+    if (mode === 0) { const k = 1.15 + 0.5 * (1 - l); r *= k; g *= k; b *= k; }
+    else if (mode === 1) { r = 70 * l + 10; g = 255 * l + 30; b = 110 * l + 20; }
+    else if (mode === 2) { r = g = b = 40 + 215 * l; }
+    else { const m = Math.max(r, g, b, 1), k = 255 / m; r *= k; g *= k; b *= k; } // neon: full-value hue
+    cellChar[c] = gi;
+    cellRGB[c] = (Math.min(255, b) << 16) | (Math.min(255, g) << 8) | Math.min(255, r);
+  }
+  return true;
+}
+// ------------------------------------------------------ audio reactivity
+const RX = makeReactor(vid), fx = RX.fx;
+const ensureAnalyser = () => RX.start();
+const updateAudio = () => RX.update(opt.react);
+function renderFrame() {
+  if (!computeCells()) return;
+  if (opt.react && !exporting) {
+    RX.applyToCells(cellChar, cellRGB, N, COLS, NCH, opt.intensity, opt.fx);
+    R.draw(cellChar, cellRGB, opt.glow, RX.params(opt.intensity, opt.fx));
+  } else R.draw(cellChar, cellRGB, opt.glow);
+}
+const fxpanel = document.getElementById("fxpanel"), fxint = document.getElementById("fxint"), fxval = document.getElementById("fxval");
+const fxlist = document.getElementById("fxlist");
+for (const [key, name] of FX_LIST) { // one checkbox per effect
+  const lab = document.createElement("label"), box = document.createElement("input");
+  box.type = "checkbox"; box.dataset.fx = key; box.checked = !!opt.fx[key];
+  box.addEventListener("change", () => { opt.fx[key] = box.checked; if (vid.paused) renderFrame(); });
+  lab.append(box, " " + name); fxlist.append(lab);
+}
+function syncSlider() {
+  fxint.value = Math.round(opt.intensity * 100); fxval.textContent = `${fxint.value}%`;
+  fxpanel.classList.toggle("disabled", !opt.react);
+  fxint.title = opt.react ? "" : "Press A to turn audio-reactive effects on";
+  for (const box of fxlist.querySelectorAll("input")) box.checked = !!opt.fx[box.dataset.fx];
+}
+fxint.addEventListener("input", () => { opt.intensity = +fxint.value / 100; syncSlider(); if (vid.paused) renderFrame(); });
+syncSlider();
+let exporting = false;
+// draw on every new video frame when supported, otherwise on animation frames
+if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
+  const onVF = () => { if (!exporting) { updateAudio(); renderFrame(); } vid.requestVideoFrameCallback(onVF); };
+  vid.requestVideoFrameCallback(onVF);
+} else {
+  const loop = () => { if (!vid.paused && !exporting) { updateAudio(); renderFrame(); } requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+}
+
+// ------------------------------------------------------------- loading
+let objectUrl = null, videoName = "video", currentFile = null, autoMuted = false;
+vid.volume = opt.volume;
+// Try to play with sound; browsers block that without a click, so fall back to muted
+// and turn sound on at the first click or key press.
+async function load(src, name, quiet) {
+  vid.src = src; videoName = name; autoMuted = false;
+  try { vid.muted = false; await vid.play(); }
+  catch (e) {
+    if (e.name !== "NotAllowedError") { if (!quiet) status(`couldn't play ${name}`); return; }
+    vid.muted = true; autoMuted = true;
+    try { await vid.play(); } catch { if (!quiet) status(`couldn't play ${name}`); return; }
+  }
+  drop.classList.add("hidden");
+  status(autoMuted ? `playing ${name} - click or press M for sound` : `playing ${name}`);
+}
+function loadFile(f) {
+  if (!f || !f.type.startsWith("video/")) { status("that file isn't a video"); return; }
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(f);
+  load(objectUrl, f.name).then(() => { currentFile = f; });
+}
+addEventListener("pointerdown", () => {
+  if (autoMuted) { autoMuted = false; vid.muted = false; status(`playing ${videoName}`); }
+  if (opt.react) ensureAnalyser(); // audio analysis can only start after a click
+});
+if (opt.react) vid.addEventListener("playing", () => ensureAnalyser(), { once: true });
+vid.addEventListener("error", () => drop.classList.remove("hidden"));
+load(Q.get("src") || "video.mp4", Q.get("src") || "video.mp4", !Q.get("src")); // auto-load for wallpaper apps
+document.getElementById("pick").addEventListener("click", () => fileIn.click());
+fileIn.addEventListener("change", () => loadFile(fileIn.files[0]));
+addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+addEventListener("dragleave", () => drop.classList.remove("over"));
+addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); loadFile(e.dataTransfer.files[0]); });
+
+// -------------------------------------------------------------- export
+// File format: gzip of every frame packed as [N glyph bytes][N x RGB565 little-endian],
+// each frame XORed with the previous one so unchanged cells become zeros and compress well.
+const exp = document.getElementById("exp"), xfps = document.getElementById("xfps"), xcell = document.getElementById("xcell");
+const xfrom = document.getElementById("xfrom"), xto = document.getElementById("xto"), xinfo = document.getElementById("xinfo");
+const xprog = document.getElementById("xprog"), xgo = document.getElementById("xgo"), xcancel = document.getElementById("xcancel");
+let cancelExport = false;
+for (const c of CELLS) xcell.add(new Option(`${gridFor(c)} characters`, c));
+const xaud = document.getElementById("xaud");
+const AUDIO_BPS = 128000;
+function exportInfo() {
+  const fps = +xfps.value, cell = +xcell.value, n = Math.floor(W / cellW(cell)) * Math.floor(H / cell), secs = +xto.value - +xfrom.value;
+  const frames = Math.max(0, Math.floor(secs * fps)), raw = frames * n * 3, aud = xaud.checked ? secs * AUDIO_BPS / 8 * 1.34 : 0;
+  xinfo.textContent = frames ? `${frames} frames, roughly ${((raw / 6 + aud) / 1e6).toFixed(1)}-${((raw / 3 + aud) / 1e6).toFixed(1)} MB file (estimate)` : "Choose a time range.";
+}
+[xfps, xcell, xfrom, xto, xaud].forEach(el => el.addEventListener("input", exportInfo));
+// Audio: decode the clip's soundtrack, play the chosen range silently into a recorder
+// (real time, in parallel with the frame export) and keep the compressed result.
+let audioSrc = null;
+async function recordAudio(from, to) {
+  const bytes = currentFile ? await currentFile.arrayBuffer() : await (await fetch(vid.currentSrc)).arrayBuffer();
+  const ctx = new AudioContext();
+  try {
+    let buf;
+    try { buf = await ctx.decodeAudioData(bytes); } catch { throw new Error("no audio track found"); }
+    const mime = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/webm"].find(m => MediaRecorder.isTypeSupported(m));
+    if (!mime) throw new Error("this browser can't record audio");
+    const dest = ctx.createMediaStreamDestination(); // not connected to the speakers: records silently
+    audioSrc = ctx.createBufferSource(); audioSrc.buffer = buf; audioSrc.connect(dest);
+    const rec = new MediaRecorder(dest.stream, { mimeType: mime, audioBitsPerSecond: AUDIO_BPS }), chunks = [];
+    rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    const stopped = new Promise(r => { rec.onstop = r; });
+    const ended = new Promise(r => { audioSrc.onended = r; });
+    await ctx.resume();
+    rec.start(1000); audioSrc.start(0, from, Math.max(0.05, Math.min(to, buf.duration) - from));
+    await ended; rec.stop(); await stopped;
+    return new Blob(chunks, { type: mime.split(";")[0] });
+  } finally { audioSrc = null; ctx.close(); }
+}
+const blobToBase64 = async b => toBase64(new Uint8Array(await b.arrayBuffer()));
+function openExport() {
+  if (!vid.videoWidth || !Number.isFinite(vid.duration)) { status("load a video file first"); return; }
+  xcell.value = opt.cell; xfrom.value = 0; xto.value = Math.min(vid.duration, 60).toFixed(1); xto.max = vid.duration.toFixed(1);
+  xprog.hidden = true; xgo.disabled = false; exportInfo(); exp.showModal();
+}
+xcancel.addEventListener("click", () => { if (exporting) { cancelExport = true; if (audioSrc) audioSrc.stop(); } else exp.close(); });
+function seekTo(t) {
+  // wait for 'seeked' plus a short timer so the new frame is drawable; timers (not
+  // animation frames) keep the export running even when the tab is in the background
+  return new Promise(res => {
+    const finish = () => setTimeout(res, 20);
+    if (Math.abs(vid.currentTime - t) < 1e-4) return finish();
+    const guard = setTimeout(finish, 1500);
+    vid.addEventListener("seeked", () => { clearTimeout(guard); finish(); }, { once: true });
+    vid.currentTime = t;
+  });
+}
+let EXPORT_CHUNK = 24 * 1024 * 1024; // bytes per embedded block; a multiple of 3 so each block is valid base64 alone
+function toBase64(u8) {
+  let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+const esc = s => s.replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
+xgo.addEventListener("click", async () => {
+  const fps = +xfps.value, cell = +xcell.value, from = clamp(+xfrom.value, 0, vid.duration), to = clamp(+xto.value, 0, vid.duration);
+  const frames = Math.floor((to - from) * fps);
+  if (frames < 1) { xinfo.textContent = "'To' must be after 'From'."; return; }
+  if (typeof CompressionStream === "undefined") { xinfo.textContent = "This browser can't compress files; try Chrome, Edge or Firefox."; return; }
+  const keepCell = opt.cell, wasPlaying = !vid.paused;
+  exporting = true; cancelExport = false; xgo.disabled = true; xprog.hidden = false; xprog.value = 0;
+  vid.pause(); opt.cell = cell; rebuild();
+  const cs = new CompressionStream("gzip"), writer = cs.writable.getWriter(), out = new Response(cs.readable).arrayBuffer();
+  const prev = new Uint8Array(3 * N), cur = new Uint8Array(3 * N);
+  let done = 0, audioNote = "";
+  const audioJob = xaud.checked ? recordAudio(from, to).catch(err => { audioNote = ` No sound: ${err.message}.`; return null; }) : null;
+  try {
+    for (let f = 0; f < frames && !cancelExport; f++) {
+      await seekTo(from + f / fps);
+      computeCells();
+      for (let c = 0; c < N; c++) {
+        const v = cellRGB[c], r = v & 255, g = (v >> 8) & 255, b = (v >> 16) & 255;
+        let p = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+        // keep the previous colour when it barely changed: video noise otherwise makes every cell "new" and bloats the file
+        const q = prev[N + 2 * c] | (prev[N + 2 * c + 1] << 8);
+        if (cellChar[c] === prev[c] && Math.abs((p >> 11) - (q >> 11)) <= 1 && Math.abs(((p >> 5) & 63) - ((q >> 5) & 63)) <= 2
+          && Math.abs((p & 31) - (q & 31)) <= 1) p = q;
+        cur[c] = cellChar[c]; cur[N + 2 * c] = p & 255; cur[N + 2 * c + 1] = p >> 8;
+      }
+      const delta = new Uint8Array(3 * N);
+      for (let i = 0; i < delta.length; i++) delta[i] = cur[i] ^ prev[i];
+      await writer.write(delta); prev.set(cur); done++;
+      R.draw(cellChar, cellRGB, opt.glow); // live preview of what's being exported
+      xprog.value = done / frames; xinfo.textContent = `Exporting frame ${done} of ${frames}...`;
+    }
+    await writer.close();
+    const gz = new Uint8Array(await out);
+    if (audioJob && !cancelExport) xinfo.textContent = "Finishing the audio...";
+    const audioBlob = audioJob ? await audioJob : null;
+    if (cancelExport) { xinfo.textContent = "Export cancelled."; return; }
+    const meta = { fps, frames: done, cw: cellW(cell), ch: cell, chars: charsNow(), nch: NCH, glow: opt.glow,
+      audio: !!audioBlob, react: !!audioBlob && opt.react, intensity: opt.intensity, // effects only when audio-reactive is on (A)
+      fx: Object.keys(opt.fx).filter(k => opt.fx[k]) };
+    const audioTag = audioBlob
+      ? `<audio id="aud" loop preload="auto" src="data:${audioBlob.type};base64,${await blobToBase64(audioBlob)}"></audio>`
+        + `<div id="hint" hidden style="position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:rgba(0,0,0,.72);color:#ece8f6;font:15px Consolas,monospace;padding:8px 14px;border-radius:8px">Click for sound</div>`
+      : "";
+    const title = videoName.replace(/\.[^.]+$/, "") + " (ASCII)";
+    const parts = [`<!doctype html>\n<!-- ASCII animation exported by ascii_video_player.html. Open in a browser or use as a Lively / Wallpaper Engine wallpaper. -->\n`
+      + `<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title>`
+      + `<style>html,body{margin:0;height:100%;overflow:hidden;background:#030208}canvas{display:block;width:100vw;height:100vh;object-fit:contain}</style></head>`
+      + `<body><canvas id="view" width="2560" height="1440" aria-label="ASCII animation"></canvas>${audioTag}`
+      + `<script type="application/json" id="meta">${JSON.stringify(meta).replace(/</g, "\\u003c")}<\/script>`];
+    // Frame data goes in many small blocks: browsers can't hold one string over ~512 MB.
+    for (let i = 0; i < gz.length; i += EXPORT_CHUNK)
+      parts.push(`<script type="application/octet-stream" class="d">${toBase64(gz.subarray(i, i + EXPORT_CHUNK))}<\/script>`);
+    parts.push(`<script>${document.getElementById("core").textContent}<\/script><script>${PLAYER_SRC}<\/script></body></html>`);
+    const html = new Blob(parts, { type: "text/html" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(html);
+    a.download = videoName.replace(/\.[^.]+$/, "") + "_ascii.html";
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    xinfo.textContent = `Saved ${a.download} (${(html.size / 1e6).toFixed(1)} MB${audioBlob ? ", with sound" : ""}).${audioNote}`;
+  } catch (err) {
+    xinfo.textContent = `Export failed: ${err.message}`;
+  } finally {
+    exporting = false; xgo.disabled = false; xprog.hidden = true;
+    opt.cell = keepCell; rebuild(); if (wasPlaying) vid.play(); else renderFrame();
+  }
+});
+// Player for exported files: streams the gzip and XORs frames forward as playback needs
+// them, so long, detailed exports never have to fit in memory all at once.
+const PLAYER_SRC = `
+"use strict";
+(async () => {
+  const META = JSON.parse(document.getElementById("meta").textContent);
+  const R = makeRenderer(document.getElementById("view"));
+  const { N, COLS } = R.setGrid(META.chars, META.cw, META.ch);
+  const FXON = Object.fromEntries((META.fx || FX_DEFAULT).map(k => [k, true]));
+  const blocks = [];
+  for (const el of document.querySelectorAll("script.d")) blocks.push(await (await fetch("data:application/octet-stream;base64," + el.textContent)).blob());
+  const gz = new Blob(blocks), FRAME = 3 * N;
+  const planes = new Uint8Array(FRAME), cellChar = new Uint8Array(N), cellRGB = new Uint32Array(N);
+  let frames = META.frames, f = -1, pos = 0, reader = null, chunk = null, at = 0;
+  function restart() { // back to frame 0
+    if (reader) reader.cancel().catch(() => {});
+    reader = gz.stream().pipeThrough(new DecompressionStream("gzip")).getReader();
+    chunk = null; at = 0; pos = 0; f = -1; planes.fill(0);
+  }
+  async function nextFrame() { // XOR one whole frame into planes; false when the data runs out
+    for (;;) {
+      if (!chunk || at >= chunk.length) { const r = await reader.read(); if (r.done) return false; chunk = r.value; at = 0; }
+      const take = Math.min(FRAME - pos, chunk.length - at);
+      for (let i = 0; i < take; i++) planes[pos + i] ^= chunk[at + i];
+      pos += take; at += take;
+      if (pos === FRAME) { pos = 0; f++; return true; }
+    }
+  }
+  let want = 0, busy = false, fresh = false;
+  function unpack() { // snapshot the finished frame so drawing never sees a half-decoded one
+    for (let c = 0; c < N; c++) {
+      cellChar[c] = planes[c];
+      const p = planes[N + 2 * c] | (planes[N + 2 * c + 1] << 8);
+      cellRGB[c] = ((((p & 31) << 3) | 4) << 16) | (((((p >> 5) & 63) << 2) | 2) << 8) | (((p >> 11) << 3) | 4);
+    }
+    fresh = true;
+  }
+  async function decode() {
+    if (busy) return; busy = true;
+    try {
+      if (want < f) restart(); // looped
+      while (f < want) {
+        if (!(await nextFrame())) { frames = Math.max(1, f + 1); want %= frames; restart(); continue; }
+        if (f === want || f % 8 === 0) unpack(); // every 8th too, so a slow PC still shows progress
+      }
+    } finally { busy = false; }
+  }
+  restart();
+  const t0 = performance.now(); let dur = frames / META.fps;
+  const clockT = () => (performance.now() - t0) / 1000;
+  // Sound: frames follow the audio clock while it plays. Browsers may block sound until
+  // a click, so the animation runs on its own clock until then.
+  const aud = document.getElementById("aud"), hint = document.getElementById("hint");
+  let audioOn = false, react = !!META.react;
+  const RX = aud && META.react ? makeReactor(aud) : null; // only exported with audio-reactive on
+  async function startAudio() {
+    if (!aud) return;
+    if (react) RX.start();
+    if (audioOn) return;
+    try { aud.currentTime = clockT() % dur; await aud.play(); audioOn = true; if (hint) hint.hidden = true; }
+    catch { if (hint) hint.hidden = false; }
+  }
+  if (aud) {
+    aud.addEventListener("pause", () => { audioOn = false; });
+    addEventListener("pointerdown", startAudio);
+    addEventListener("keydown", e => {
+      const k = e.key.toLowerCase();
+      if (k === "m") aud.muted = !aud.muted;
+      else if (k === "a" && RX) { react = !react; if (react) RX.start(); } // A: audio-reactive effects on/off
+      else startAudio();
+    });
+    startAudio();
+  }
+  function step(now) {
+    requestAnimationFrame(step);
+    const t = audioOn && !aud.paused ? aud.currentTime : clockT();
+    dur = frames / META.fps;
+    want = Math.floor(t * META.fps) % frames;
+    decode();
+    if (!fresh) return; // only draw new, whole frames
+    fresh = false;
+    if (RX && react) {
+      const s = META.intensity ?? 1;
+      RX.update(true); RX.applyToCells(cellChar, cellRGB, N, COLS, META.nch || 2, s, FXON);
+      R.draw(cellChar, cellRGB, META.glow, RX.params(s, FXON));
+    } else R.draw(cellChar, cellRGB, META.glow);
+  }
+  requestAnimationFrame(step);
+})();
+`;
+
+// ----------------------------------------------------------------- HUD
+let msg = "", idleTimer = 0;
+function status(m) { msg = m; drawHud(); }
+function drawHud() {
+  hud.classList.toggle("off", !opt.hud);
+  hud.textContent = [
+    msg,
+    `[C] ${MODES[opt.mode]}   [R] ${SET_NAMES[opt.set]}   [D] detail ${COLS}x${ROWS}   [E] edges ${EDGES[opt.edges]}`,
+    `[ ] brightness ${opt.bright >= 0 ? "+" : ""}${opt.bright.toFixed(2)}   - = contrast ${opt.contrast.toFixed(2)}   [G] glow ${opt.glow ? "on" : "off"}`,
+    `[M] ${vid.muted ? "muted" : "sound on"}   [Up/Down] volume ${Math.round(opt.volume * 100)}%   [A] audio-reactive ${opt.react ? "on" : "off"}`,
+    "[Space] play/pause  [Left/Right] seek  [O] open  [X] export  [F] fullscreen  [H] hide",
+  ].filter(Boolean).join("\n");
+  fxpanel.classList.toggle("off", !opt.hud); syncSlider();
+  hud.classList.remove("idle"); fxpanel.classList.remove("idle"); clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { hud.classList.add("idle"); fxpanel.classList.add("idle"); }, 3500);
+}
+addEventListener("mousemove", drawHud);
+addEventListener("keydown", e => {
+  if (exp.open || exporting || (e.target instanceof Node && fxpanel.contains(e.target))) return; // panel controls keep their own keys
+  const k = e.key.toLowerCase();
+  if (k === " ") { e.preventDefault(); vid.paused ? vid.play() : vid.pause(); }
+  else if (k === "m") { vid.muted = !vid.muted; autoMuted = false; }
+  else if (k === "arrowup") { e.preventDefault(); vid.volume = opt.volume = clamp(Math.round((opt.volume + 0.1) * 10) / 10, 0, 1); vid.muted = false; autoMuted = false; }
+  else if (k === "arrowdown") { e.preventDefault(); vid.volume = opt.volume = clamp(Math.round((opt.volume - 0.1) * 10) / 10, 0, 1); }
+  else if (k === "arrowright") vid.currentTime = Math.min(vid.duration || 0, vid.currentTime + 5);
+  else if (k === "arrowleft") vid.currentTime = Math.max(0, vid.currentTime - 5);
+  else if (k === "o") fileIn.click();
+  else if (k === "x") { openExport(); return; }
+  else if (k === "c") opt.mode = (opt.mode + 1) % MODES.length;
+  else if (k === "r") { opt.set = (opt.set + 1) % CHARSETS.length; rebuild(); }
+  else if (k === "d") { const i = CELLS.indexOf(opt.cell); opt.cell = CELLS[(i + (e.shiftKey ? CELLS.length - 1 : 1)) % CELLS.length]; rebuild(); }
+  else if (k === "e") opt.edges = (opt.edges + 1) % EDGES.length;
+  else if (k === "[") opt.bright = clamp(opt.bright - 0.05, -0.5, 0.5);
+  else if (k === "]") opt.bright = clamp(opt.bright + 0.05, -0.5, 0.5);
+  else if (k === "-") opt.contrast = clamp(opt.contrast - 0.1, 0.5, 3);
+  else if (k === "=" || k === "+") opt.contrast = clamp(opt.contrast + 0.1, 0.5, 3);
+  else if (k === "g") opt.glow = !opt.glow;
+  else if (k === "a") {
+    opt.react = !opt.react;
+    if (opt.react && !ensureAnalyser()) { opt.react = false; status("this browser can't analyse the video's audio"); }
+  }
+  else if (k === "f") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  else if (k === "h") opt.hud = !opt.hud;
+  else return;
+  if (vid.paused) renderFrame();
+  drawHud();
+});
+drawHud();
+</script>
+</body>
+</html>

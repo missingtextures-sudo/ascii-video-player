@@ -1,0 +1,6 @@
+# keep videos and exported animations out of the repo
+*.mp4
+*.webm
+*.mov
+*.mkv
+*_ascii.html
