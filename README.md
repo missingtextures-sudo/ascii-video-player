@@ -1,5 +1,7 @@
 # ASCII Video Player
 
+![A cartoon bowl of ramen rendered as glowing colour ASCII art](docs/demo.jpg)
+
 Play any video on your computer as glowing, colour ASCII art at 2560x1440, add
 audio-reactive effects, and export the result as a single self-contained `.html`
 animation. It works in a normal browser or as a live wallpaper in
